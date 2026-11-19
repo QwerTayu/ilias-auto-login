@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "ILIAS Auto Login",
+  "version": "0.1.0",
+  "description": "長岡技大 ILIAS のログイン画面で LDAP 認証を選び、パスワードマネージャが ID・パスワードを入れたらログインボタンを押す。",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "ILIAS Auto Login",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://cera-e1.nagaokaut.ac.jp/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
