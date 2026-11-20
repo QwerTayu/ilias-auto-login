@@ -61,28 +61,64 @@
     return el.value !== "" || matchesSafe(el, ":autofill") || matchesSafe(el, ":-webkit-autofill");
   }
 
+  // 手で打っている途中で押さないよう、文字を打つキー入力（isTrusted）があったら "typed" で終える。
+  // パスワードマネージャの入力や、自動入力の候補を選ぶ操作では "typed" にならない。
+  // Chrome の自動入力も isTrusted な keydown を送るが、key を持たない（KeyboardEvent ではない）ので除く。
+  function isTypingKey(event) {
+    const { key } = event;
+    if (!event.isTrusted || typeof key !== "string") return false;
+    return key.length === 1 || key === "Backspace" || key === "Delete";
+  }
+
+  // 欄が埋まれば "filled"、手で打たれたら "typed"、時間切れなら "timeout" を返す。
   function waitUntilFilled(fields, timeoutMs) {
     return new Promise((resolve) => {
       let settleTimer = null;
-      const check = () => {
+      // ポーリングでは、埋まっている間はタイマーをそのまま進める。欄の値が変わったら（input / change）、
+      // 入力の途中かもしれないので、そこから測り直す。
+      const check = (restart) => {
+        if (!fields.every(isFilled)) {
+          clearTimeout(settleTimer);
+          settleTimer = null;
+          return;
+        }
+        if (settleTimer !== null && !restart) return;
         clearTimeout(settleTimer);
-        if (!fields.every(isFilled)) return;
         settleTimer = setTimeout(() => {
-          if (fields.every(isFilled)) finish(true);
+          settleTimer = null;
+          if (fields.every(isFilled)) finish("filled");
         }, SETTLE_MS);
       };
-      const poll = setInterval(check, 250);
-      const timer = setTimeout(() => finish(false), timeoutMs);
+      const onFieldEvent = () => check(true);
+      const onKeydown = (event) => {
+        if (isTypingKey(event)) finish("typed");
+      };
+      const poll = setInterval(() => check(false), 250);
+      const timer = setTimeout(() => finish("timeout"), timeoutMs);
       const events = ["input", "change"];
-      for (const field of fields) for (const type of events) field.addEventListener(type, check);
-      function finish(filled) {
+      for (const field of fields) for (const type of events) field.addEventListener(type, onFieldEvent);
+      for (const field of fields) field.addEventListener("keydown", onKeydown);
+      function finish(state) {
         clearInterval(poll);
         clearTimeout(timer);
         clearTimeout(settleTimer);
-        for (const field of fields) for (const type of events) field.removeEventListener(type, check);
-        resolve(filled);
+        for (const field of fields) for (const type of events) field.removeEventListener(type, onFieldEvent);
+        for (const field of fields) field.removeEventListener("keydown", onKeydown);
+        resolve(state);
       }
-      check();
+      check(false);
+    });
+  }
+
+  // フォームの欄に触れるか、値が入る（自動入力の候補を選んだときなど）まで待つ。
+  function waitForInteraction(form) {
+    const events = ["focusin", "input", "change"];
+    return new Promise((resolve) => {
+      const onEvent = () => {
+        for (const type of events) form.removeEventListener(type, onEvent, true);
+        resolve();
+      };
+      for (const type of events) form.addEventListener(type, onEvent, true);
     });
   }
 
@@ -122,8 +158,16 @@
     }
 
     log("ID とパスワードが入るのを待ちます");
-    if (!(await waitUntilFilled([user, password], WAIT_MS))) {
-      log("時間内に入らなかったので、何もしません");
+    // 時間切れのあとも、欄に触れるか値が入ったら（自動入力の候補を選んだときなど）、そこからまた待つ。
+    let state = await waitUntilFilled([user, password], WAIT_MS);
+    while (state === "timeout") {
+      log("時間内に入らなかったので待つのをやめます。欄に触れると、また待ちます");
+      await waitForInteraction(form);
+      log("ID とパスワードが入るのを待ちます");
+      state = await waitUntilFilled([user, password], WAIT_MS);
+    }
+    if (state === "typed") {
+      log("手で入力しているので、自動では押しません");
       return;
     }
 
